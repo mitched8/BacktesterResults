@@ -221,6 +221,68 @@ def main():
     # Generate data
     greeks_df = generate_greeks_data()
     
+    # Scaling controls
+    st.markdown("### Scaling Options")
+    
+    scale_col1, scale_col2, scale_col3, scale_col4 = st.columns([1, 1, 1, 2])
+    
+    with scale_col1:
+        enable_scaling = st.checkbox("Enable Scaling", value=False)
+    
+    with scale_col2:
+        scale_greek = st.selectbox(
+            "Scale By",
+            options=['Vega', 'Gamma'],
+            index=0,
+            disabled=not enable_scaling
+        )
+    
+    with scale_col3:
+        reference_tenor = st.selectbox(
+            "Reference Tenor",
+            options=['1M', '3M', '6M', '1Y'],
+            index=0,
+            disabled=not enable_scaling
+        )
+    
+    with scale_col4:
+        reference_delta = st.selectbox(
+            "Reference Delta",
+            options=['10P', '25P', '50P', '25C', '10C'],
+            index=2,  # Default to 50P
+            disabled=not enable_scaling
+        )
+    
+    # Apply scaling if enabled
+    if enable_scaling:
+        reference_strategy = f"{reference_tenor}_{reference_delta}"
+        reference_value = greeks_df.loc[reference_strategy, scale_greek]
+        
+        # Scale all Greeks by the ratio of their scale_greek to the reference
+        scaled_df = greeks_df.copy()
+        
+        for strategy in greeks_df.index:
+            # Calculate scaling factor for this strategy based on the selected Greek
+            strategy_greek_value = greeks_df.loc[strategy, scale_greek]
+            ratio = strategy_greek_value / reference_value
+            
+            # Apply the ratio to all Greeks
+            scaled_df.loc[strategy, 'PnL'] = greeks_df.loc[strategy, 'PnL'] * ratio
+            scaled_df.loc[strategy, 'Vega'] = greeks_df.loc[strategy, 'Vega'] * ratio
+            scaled_df.loc[strategy, 'Gamma'] = greeks_df.loc[strategy, 'Gamma'] * ratio
+        
+        # Show scaling info
+        st.info(f"📊 Normalizing all Greeks relative to **{reference_strategy}** {scale_greek} = {reference_value:,.2f}. Reference contract values remain unchanged.")
+        
+        # Use scaled data for display
+        display_greeks_df = scaled_df
+        scaling_factor = None  # Not used in new approach
+    else:
+        display_greeks_df = greeks_df
+        scaling_factor = 1
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
     # Metric selector
     col1, col2, col3 = st.columns([1, 1, 4])
     
@@ -232,9 +294,10 @@ def main():
         )
     
     with col2:
+        total_value = display_greeks_df[metric].sum()
         st.metric(
             label=f"Total {metric}",
-            value=f"${greeks_df[metric].sum():,.0f}" if metric == 'PnL' else f"{greeks_df[metric].sum():,.0f}"
+            value=f"${total_value:,.0f}" if metric == 'PnL' else f"{total_value:,.0f}"
         )
     
     st.markdown("<br>", unsafe_allow_html=True)
@@ -249,7 +312,7 @@ def main():
         row = {'Tenor': tenor}
         for delta in deltas:
             strategy = f"{tenor}_{delta}"
-            value = greeks_df.loc[strategy, metric]
+            value = display_greeks_df.loc[strategy, metric]
             row[delta] = value
         grid_data.append(row)
     
@@ -299,27 +362,31 @@ def main():
         
         st.markdown(f"### Position: {strategy}")
         
+        if enable_scaling:
+            st.caption(f"Values scaled relative to {reference_strategy}")
+        
         # Show all metrics for selected position
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            pnl_val = greeks_df.loc[strategy, 'PnL']
+            pnl_val = display_greeks_df.loc[strategy, 'PnL']
             st.metric(
-                label="P&L",
+                label="P&L" + (" (normalized)" if enable_scaling else ""),
                 value=f"${pnl_val:,.0f}",
                 delta=f"{(pnl_val/abs(pnl_val)*100) if pnl_val != 0 else 0:.1f}%" if pnl_val != 0 else "0%"
             )
         
         with col2:
+            vega_val = display_greeks_df.loc[strategy, 'Vega']
             st.metric(
-                label="Vega",
-                value=f"{greeks_df.loc[strategy, 'Vega']:,.0f}"
+                label="Vega" + (" (normalized)" if enable_scaling else ""),
+                value=f"{vega_val:,.0f}"
             )
         
         with col3:
-            gamma_val = greeks_df.loc[strategy, 'Gamma']
+            gamma_val = display_greeks_df.loc[strategy, 'Gamma']
             st.metric(
-                label="Gamma",
+                label="Gamma" + (" (normalized)" if enable_scaling else ""),
                 value=f"{gamma_val:,.2f}"
             )
         
@@ -361,14 +428,19 @@ def main():
     
     # Show raw data (optional)
     with st.expander("View Raw Data"):
+        display_data = display_greeks_df if enable_scaling else greeks_df
         st.dataframe(
-            greeks_df.style.format({
+            display_data.style.format({
                 'PnL': '${:,.2f}',
                 'Vega': '{:,.2f}',
                 'Gamma': '{:,.2f}'
             }),
             use_container_width=True
         )
+        
+        if enable_scaling:
+            st.caption(f"All Greeks normalized by {scale_greek} ratio relative to {reference_strategy}")
+            st.caption(f"Reference {scale_greek}: {reference_value:,.2f}")
 
 if __name__ == "__main__":
     main()
